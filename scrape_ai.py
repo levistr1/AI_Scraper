@@ -44,6 +44,10 @@ class Listing(BaseModel):
     shared_room: bool
 
 
+# ---------------------------------------------------------------------------
+#   Listing-level models (for later steps)
+# ---------------------------------------------------------------------------
+
 class ListingSnapshot(BaseModel):
     availability: str
     price: str
@@ -51,6 +55,29 @@ class ListingSnapshot(BaseModel):
     description: str
     original_price: str
     deals: str
+
+
+# ---------------------------------------------------------------------------
+#   Floor-plan container detection
+# ---------------------------------------------------------------------------
+
+class ContainerSelector(BaseModel):
+    """Return value for :pyfunc:`init_container`.
+
+    Only a single field – ``selector`` – which contains a CSS selector that
+    matches *each* floor-plan card / container on the page. The selector must
+    include **all** relevant information for an individual listing (price,
+    beds, baths, sqft, availability, deals, …).
+    """
+
+    selector: str = Field(
+        description=(
+            "CSS selector that, when applied with querySelectorAll, returns one"
+            " element per floor-plan listing. Use attribute starts-with/ends-with"
+            " selectors (e.g. div[id^='fp-']) or :is(), :where(), etc. when"
+            " necessary to handle dynamic ids such as 'fp-124', 'fp-245'."
+        )
+    )
 
 
 # --- OpenAI client ----------------------------------------------------------
@@ -158,6 +185,55 @@ async def ai_init(url: str, text: str) -> Site:
 
     return site
 
+async def init_container(url: str, text: str) -> str:
+    """Given the raw HTML of a *floor-plans page*, return a CSS selector that
+    identifies the container element for *each* individual floor-plan.
+
+    The goal is to make downstream scraping easy: the selector should surround
+    as much information as possible for one listing (price, beds, baths, sqft,
+    availability, deals, etc.).  Dynamic ids that differ only by numeric parts
+    (e.g. ``#fp-124`` vs. ``#fp-245``) *are allowed*, in which case prefer a
+    *pattern-based* selector like ``div[id^='fp-']``.
+    """
+
+    prompt = (
+        "You are given the HTML of a *floor-plans* page for an apartment site.\n\n"
+        f"Current URL: {url}\n"
+        f"HTML: {text}\n\n"
+        "Find a single CSS selector that selects **one element per floor-plan" \
+        " listing**, where each selected element contains as much detail as\n" \
+        " possible about that listing (beds, baths, price, availability, sqft,\n" \
+        " deals, etc.).\n\n"
+        "Requirements:\n"
+        "• The selector MUST match *every* listing and nothing else.\n"
+        "• If the container elements have dynamic ids/prefixes (e.g. fp-124,\n"
+        "  fp-245) use an attribute prefix selector such as `div[id^='fp-']`.\n"
+        "• Prefer concise selectors with class/id attributes; avoid selectors\n"
+        "  that rely on absolute DOM hierarchy positions unless necessary.\n"
+        "• Output ONLY the selector string in your reply. No markdown, no extra\n"
+        "  text.\n"
+    )
+
+    completion = await asyncio.to_thread(
+        client.chat.completions.create,
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "You are an expert web-scraping assistant"},
+            {"role": "user", "content": prompt},
+        ],
+        response_format={"type": "text"}  # raw text; we post-process into the model
+    )
+
+    raw_selector = completion.choices[0].message.content.strip()
+
+    # Validate minimal sanity: non-empty and no whitespace-only string.
+    if not raw_selector:
+        raise ValueError("GPT did not return a selector")
+
+    # Wrap into ContainerSelector for type safety (will raise if invalid).
+    selector_obj = ContainerSelector(selector=raw_selector)
+
+    return selector_obj.selector
 
 def parse_raw_content(raw_content: str, url: str) -> Site:
     if isinstance(raw_content, Site):
@@ -176,3 +252,5 @@ def parse_raw_content(raw_content: str, url: str) -> Site:
                 "Failed to parse response from OpenAI into `Site` model: "
                 f"{exc}. Raw content: {raw_content!r}"
             ) from exc
+        
+ 

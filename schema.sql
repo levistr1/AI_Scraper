@@ -12,6 +12,7 @@ CREATE TABLE `site` (
   `amenities` text,
   `state` varchar(2),
   `address` varchar(255),
+  `container_selector` varchar(255),
   PRIMARY KEY (`id`)
 );
 
@@ -24,6 +25,7 @@ CREATE TABLE `property` (
   `title` varchar(255),
   `amenities` text,
   `address` varchar(255),
+  `container_selector` varchar(255),
   PRIMARY KEY (`id`),
   KEY `site_id` (`site_id`),
   CONSTRAINT `property_ibfk_1` FOREIGN KEY (`site_id`) REFERENCES `site` (`id`) ON DELETE CASCADE

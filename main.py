@@ -14,15 +14,22 @@ load_dotenv()
 async def main():
     db = Database()
     db.connect()
+
     sites = db.get_all_sites()
-    await init_all(sites)
+    await init_all_sites(sites)
+
+    floorplans = db.get_floorplan_urls() # only this db has valid fps obj
+    await init_all_fp(floorplans)
 
 
-async def init_all(sites):
+
+async def init_all_sites(sites):
     tasks = [init_site(site) for site in sites if not previously_visited(site["id"])]
     await asyncio.gather(*tasks)
     
 async def init_site(site):
+    db = Database()
+    db.connect()
     print("Initializing site: " + site["name"])
     nav = Navigator()
     await nav.setup()
@@ -30,9 +37,41 @@ async def init_site(site):
     try:
         text = await nav.get_text()
         site_obj = await scrape_ai.ai_init(site["url"], text)
+    except Exception as e:
+        print(e)
+        return
     finally:
         await nav.close()
+    print(site["name"])
+    id = site["id"]
     print(site_obj)
+    db.insert_site(id, site_obj)
+    db.close()
+
+
+
+
+async def init_fp(floorplan):
+    db = Database()
+    db.connect()
+    nav = Navigator()
+    await nav.setup()
+    await nav.get_page(floorplan.url)
+    try:
+        text = await nav.get_text()
+        container_selector = await scrape_ai.init_container(floorplan.url, text)
+        print(container_selector)
+    except Exception as e:
+        print(e)
+    finally:
+        await nav.close()
+    db.close()
+    
+
+
+async def init_all_fp(floorplans):
+    tasks = [init_fp(floorplan) for floorplan in floorplans]
+    await asyncio.gather(*tasks)
     
 
     

@@ -53,6 +53,7 @@ class Navigator:
         """
 
         html = await self.page.content()
+        
 
         soup = BeautifulSoup(html, "html.parser")
         for tag in soup(["script", "style", "noscript", "svg", "meta", "link"]):
@@ -60,7 +61,7 @@ class Navigator:
 
         cleaned = str(soup)
 
-        max_chars = 50000  # ~8-10k tokens, safe for GPT-4-mini prompt
+        max_chars = 50000  
         if len(cleaned) > max_chars:
             cleaned = cleaned[:max_chars]
 
