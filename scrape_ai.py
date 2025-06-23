@@ -37,11 +37,11 @@ class Site(BaseModel):
 
 
 class Listing(BaseModel):
-    listname: str
-    bedrooms: int
-    bathrooms: int
-    sqft: int
-    shared_room: bool
+    listname: str = Field(description="Name of the listing")
+    bedrooms: int = Field(description="Number of bedrooms")
+    bathrooms: int = Field(description="Number of bathrooms")
+    sqft: int = Field(description="Square footage")
+    shared_room: bool = Field(description="Whether the listing is a shared room")
 
 
 # ---------------------------------------------------------------------------
@@ -253,4 +253,75 @@ def parse_raw_content(raw_content: str, url: str) -> Site:
                 f"{exc}. Raw content: {raw_content!r}"
             ) from exc
         
+
+# ---------------------------------------------------------------------------
+#   Parse individual listings from container HTML snippets
+# ---------------------------------------------------------------------------
+
+
+async def ai_parse_listings(url: str, containers: List[str]) -> List[Listing]:
+    """Return a list of Listing objects extracted by GPT from *containers*.
+
+    Each element in *containers* is the raw HTML for one floor-plan card.
+    """
+
+    joined = "\n\n--- CONTAINER ---\n\n".join(containers)
+
+    prompt = (
+        "You are given HTML snippets, each representing a single floor-plan listing "
+        "on a real-estate website (URL shown below). Parse every snippet and build "
+        "a list of Listing objects that follow the provided schema exactly. "
+        "Return ONLY the list—no extra keys or wrapper.\n\n"
+        f"Current URL: {url}\n\n"
+        "HTML snippets (one per listing, separated by \"--- CONTAINER ---\"):\n\n"
+        f"{joined}\n\n"
+    )
+
+    init_response = await asyncio.to_thread(
+        client.beta.chat.completions.parse,
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "You are an expert web-scraping assistant"},
+            {"role": "user", "content": prompt},
+        ],
+        response_format=List[Listing],
+    )
+
+    raw_content = init_response.choices[0].message.content  # type: ignore
+
+    return parse_listings_content(raw_content)
+
+
+# --------------------------- parsing helpers -----------------------------
+
+
+def parse_listings_content(raw_content) -> List[Listing]:
+    """Normalise whatever the OpenAI client returned into List[Listing]."""
+
+    if isinstance(raw_content, list):
+        # Could be list of Listing or list of dicts.
+        if all(isinstance(item, Listing) for item in raw_content):
+            return raw_content  # type: ignore
+        else:
+            # Assume list of dicts
+            listings: List[Listing] = []
+            for item in raw_content:
+                try:
+                    listings.append(Listing.model_validate(item))
+                except Exception as exc:
+                    print(f"Skipping invalid listing item: {exc}")
+            return listings
+
+    # If we got a string, try JSON.
+    if isinstance(raw_content, str):
+        try:
+            data = json.loads(raw_content)
+            return parse_listings_content(data)
+        except Exception as exc:
+            raise ValueError(
+                f"Failed to parse listings response: {exc}. Raw: {raw_content[:300]}…"
+            ) from exc
+
+    # Unknown type
+    raise TypeError(f"Unexpected content type from OpenAI: {type(raw_content)}")
  

@@ -19,8 +19,9 @@ async def main():
     await init_all_sites(sites)
 
     floorplans = db.get_floorplan_urls() # only this db has valid fps obj
-    await init_all_fp(floorplans)
+    await scrape_all_fp(floorplans)
 
+    db.close()
 
 
 async def init_all_sites(sites):
@@ -49,38 +50,53 @@ async def init_site(site):
     db.close()
 
 
+async def scrape_all_fp(floorplans):
+    
+    tasks = [scrape_fp(fp) for fp in floorplans]
+    await asyncio.gather(*tasks)
 
-
-async def init_fp(floorplan):
+async def scrape_fp(floorplan):
     db = Database()
     db.connect()
     nav = Navigator()
     await nav.setup()
     await nav.get_page(floorplan.url)
+
+    # 1. Ensure we have a container selector saved in DB
+    selector = db.get_selector(floorplan.site_id, floorplan.property_id)
+    if not selector:
+        try:
+            text = await nav.get_text()
+            selector = await scrape_ai.init_container(floorplan.url, text)
+            db.save_selector(selector, floorplan.site_id, floorplan.property_id)
+            print(f"Selector discovered and saved: {selector}")
+        except Exception as e:
+            print(f"Failed to discover selector for {floorplan.url}: {e}")
+            await nav.close()
+            db.close()
+            return
+
+    # 2. Use selector to extract listing containers and parse them
     try:
-        text = await nav.get_text()
-        container_selector = await scrape_ai.init_container(floorplan.url, text)
-        print(container_selector)
+        await nav.page.wait_for_selector(selector)
+        elements = await nav.page.query_selector_all(selector)
+        snippets = [await el.inner_html() for el in elements]
+
+        if not snippets:
+            print(f"No listing containers found for {floorplan.url} with selector {selector}")
+            return
+
+        listings = await scrape_ai.ai_parse_listings(floorplan.url, snippets)
+        if listings:
+            db.insert_listings(floorplan.site_id, floorplan.property_id, listings)
+            print(f"Inserted {len(listings)} listings for site {floorplan.site_id}")
+        else:
+            print(f"AI returned no listings for {floorplan.url}")
     except Exception as e:
-        print(e)
+        print(f"Error scraping listings for {floorplan.url}: {e}")
     finally:
         await nav.close()
-    db.close()
-    
-
-
-async def init_all_fp(floorplans):
-    tasks = [init_fp(floorplan) for floorplan in floorplans]
-    await asyncio.gather(*tasks)
-    
-
-    
-def scrape_all(sites):
-    for site in sites:
-        url = site["url"]
-        site_id = site["id"]
-        name = site["name"]
-        
+        db.close()
 
 
 
@@ -96,12 +112,6 @@ def previously_visited(site_id: int):
         return False
     else:
         return True
-
-def scrape_site(site_id: int):
-    return 0
-
-def find_floorplans(site_id: int):
-    return 0
 
 
 

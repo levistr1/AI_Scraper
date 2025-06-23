@@ -2,6 +2,7 @@ import mysql.connector
 from typing import TypedDict, Optional, List
 from scrape_ai import ContainerSelector
 from scrape_ai import Site
+from scrape_ai import Listing
 
 class FPRecord(TypedDict):
     site_id: int
@@ -140,5 +141,72 @@ class Database:
                 self.fps.append(FloorplanURL(site_id, row["floorplans_url"], row["id"]))
 
         return self.fps
+    
+
+
+    # --------------------- container selector helpers ---------------------
+
+    def get_selector(self, site_id: int, property_id: Optional[int] = None) -> Optional[str]:
+        """Return the stored container selector or ``None`` if absent."""
+
+        cursor = self.connection.cursor()
+        if property_id is None:
+            cursor.execute("SELECT container_selector FROM site WHERE id = %s", (site_id,))
+        else:
+            cursor.execute("SELECT container_selector FROM property WHERE id = %s", (property_id,))
+
+        res = cursor.fetchone()
+        if not res:
+            return None
+        return res[0]
+
+    def save_selector(self, selector: str, site_id: int, property_id: Optional[int] = None):
+        """Persist the *selector* into the correct table row."""
+
+        cursor = self.connection.cursor()
+        if property_id is None:
+            cursor.execute(
+                "UPDATE site SET container_selector = %s WHERE id = %s",
+                (selector, site_id),
+            )
+        else:
+            cursor.execute(
+                "UPDATE property SET container_selector = %s WHERE id = %s",
+                (selector, property_id),
+            )
+        self.connection.commit()
+
+    # --------------------------- listings insert --------------------------
+
+    def insert_listings(
+        self,
+        site_id: int,
+        property_id: Optional[int],
+        listings: List[Listing],
+    ) -> None:
+        """Bulk-insert Listing rows, skip duplicates via INSERT IGNORE."""
+
+        cursor = self.connection.cursor()
+        sql = (
+            "INSERT IGNORE INTO listing "
+            "(site_id, property_id, listname, bedrooms, bathrooms, sqft, shared_room, amenities, description) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+        )
+
+        data = [
+            (
+                site_id,
+                property_id,
+                l.listname,
+                l.bedrooms,
+                l.bathrooms,
+                l.sqft,
+                int(l.shared_room) if l.shared_room is not None else None,
+            )
+            for l in listings
+        ]
+
+        cursor.executemany(sql, data)
+        self.connection.commit()
 
 

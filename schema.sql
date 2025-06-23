@@ -1,4 +1,4 @@
-
+-- real_estate_ai
 
 DROP TABLE IF EXISTS `site`;
 
