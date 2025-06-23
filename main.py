@@ -18,8 +18,15 @@ async def main():
     sites = db.get_all_sites()
     await init_all_sites(sites)
 
+    print("Initializing sites done")
+
     floorplans = db.get_floorplan_urls() # only this db has valid fps obj
+
+    print("Initializing floorplans done")
+
     await scrape_all_fp(floorplans)
+
+    print("Scraping floorplans done")
 
     db.close()
 

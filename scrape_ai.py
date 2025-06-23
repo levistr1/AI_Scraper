@@ -3,7 +3,7 @@ import asyncio
 import json
 import os
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, TypeVar, Type
 
 # Third-party
 from pydantic import BaseModel, Field
@@ -80,6 +80,20 @@ class ContainerSelector(BaseModel):
     )
 
 
+T = TypeVar("T", bound=BaseModel)
+
+def coerce_to(model: Type[T], raw) -> T:
+    """
+    Convert *raw* (Pydantic model | dict | JSON-string) into *model*.
+
+    Raises ValidationError / JSONDecodeError if the payload is irreparably bad.
+    """
+    if isinstance(raw, model):
+        return raw
+    if isinstance(raw, str):
+        return model.model_validate_json(raw)
+    return model.model_validate(raw)
+
 # --- OpenAI client ----------------------------------------------------------
 
 load_dotenv()
@@ -137,7 +151,7 @@ async def ai_init(url: str, text: str) -> Site:
 
     raw_content = init_response.choices[0].message.content  # type: ignore
 
-    site = parse_raw_content(raw_content, url)
+    site = coerce_to(Site, raw_content)
 
     # Helper to absolutise links.
     def absolutise(link: Optional[str]) -> Optional[str]:
@@ -235,28 +249,6 @@ async def init_container(url: str, text: str) -> str:
 
     return selector_obj.selector
 
-def parse_raw_content(raw_content: str, url: str) -> Site:
-    if isinstance(raw_content, Site):
-        return raw_content
-    else:
-        try:
-            # If we got a *string*, try JSON first.
-            if isinstance(raw_content, str):
-                return Site.model_validate_json(raw_content)
-            # If we got a *dict* (or other mapping-like), validate directly.
-            else:
-                return Site.model_validate(raw_content)
-        except Exception as exc:
-            # Surface a clear error message for easier debugging.
-            raise ValueError(
-                "Failed to parse response from OpenAI into `Site` model: "
-                f"{exc}. Raw content: {raw_content!r}"
-            ) from exc
-        
-
-# ---------------------------------------------------------------------------
-#   Parse individual listings from container HTML snippets
-# ---------------------------------------------------------------------------
 
 
 async def ai_parse_listings(url: str, containers: List[str]) -> List[Listing]:
@@ -284,44 +276,13 @@ async def ai_parse_listings(url: str, containers: List[str]) -> List[Listing]:
             {"role": "system", "content": "You are an expert web-scraping assistant"},
             {"role": "user", "content": prompt},
         ],
-        response_format=List[Listing],
+        response_format=ListingsWrapper,
     )
 
-    raw_content = init_response.choices[0].message.content  # type: ignore
-
-    return parse_listings_content(raw_content)
-
-
-# --------------------------- parsing helpers -----------------------------
+    wrapper = coerce_to(ListingsWrapper, init_response.choices[0].message.content)
+    return wrapper.listings
 
 
-def parse_listings_content(raw_content) -> List[Listing]:
-    """Normalise whatever the OpenAI client returned into List[Listing]."""
-
-    if isinstance(raw_content, list):
-        # Could be list of Listing or list of dicts.
-        if all(isinstance(item, Listing) for item in raw_content):
-            return raw_content  # type: ignore
-        else:
-            # Assume list of dicts
-            listings: List[Listing] = []
-            for item in raw_content:
-                try:
-                    listings.append(Listing.model_validate(item))
-                except Exception as exc:
-                    print(f"Skipping invalid listing item: {exc}")
-            return listings
-
-    # If we got a string, try JSON.
-    if isinstance(raw_content, str):
-        try:
-            data = json.loads(raw_content)
-            return parse_listings_content(data)
-        except Exception as exc:
-            raise ValueError(
-                f"Failed to parse listings response: {exc}. Raw: {raw_content[:300]}…"
-            ) from exc
-
-    # Unknown type
-    raise TypeError(f"Unexpected content type from OpenAI: {type(raw_content)}")
+class ListingsWrapper(BaseModel):
+    listings: List[Listing]
  
