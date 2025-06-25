@@ -4,6 +4,7 @@ import json
 import os
 from datetime import datetime
 from typing import List, Optional, TypeVar, Type
+import re
 
 # Third-party
 from pydantic import BaseModel, Field
@@ -42,52 +43,30 @@ class Listing(BaseModel):
     bathrooms: int = Field(description="Number of bathrooms")
     sqft: int = Field(description="Square footage")
     shared_room: bool = Field(description="Whether the listing is a shared room")
+    amenities: Optional[str] = Field(description="Any amenities the listing has")
 
-
-# ---------------------------------------------------------------------------
-#   Listing-level models (for later steps)
-# ---------------------------------------------------------------------------
 
 class ListingSnapshot(BaseModel):
-    availability: str
-    price: str
-    price_per_sqft: str
-    description: str
-    original_price: str
-    deals: str
+    listname: str = Field(description="Exactly the same listname used in the parent Listing table (acts as foreign-key lookup)")
+    availability: str = Field(description="Availability of the listing")
+    price: str = Field(description="Current price OR price range of the listing, Format for price range: 1000 - 1200 Format for single price: 1000")
+    pre_deal_price: Optional[str] = Field(description="Price of the listing before any deals, may be slashed through")
+    deals: Optional[str] = Field(description="Any deals the listing has, may be sign up deals, move in deals, etc.")
 
 
-# ---------------------------------------------------------------------------
-#   Floor-plan container detection
-# ---------------------------------------------------------------------------
+class SelectorList(BaseModel):
+    """Wrapper returned by GPT containing up to three candidate selectors."""
 
-class ContainerSelector(BaseModel):
-    """Return value for :pyfunc:`init_container`.
-
-    Only a single field – ``selector`` – which contains a CSS selector that
-    matches *each* floor-plan card / container on the page. The selector must
-    include **all** relevant information for an individual listing (price,
-    beds, baths, sqft, availability, deals, …).
-    """
-
-    selector: str = Field(
-        description=(
-            "CSS selector that, when applied with querySelectorAll, returns one"
-            " element per floor-plan listing. Use attribute starts-with/ends-with"
-            " selectors (e.g. div[id^='fp-']) or :is(), :where(), etc. when"
-            " necessary to handle dynamic ids such as 'fp-124', 'fp-245'."
-        )
+    selectors: List[str] = Field(
+        min_length=1, max_length=3,
+        description="Ranked CSS selectors, best first."
     )
 
 
+# Generic coercion helper used across parsers
+# Make a return from AI model into BaseModel type
 T = TypeVar("T", bound=BaseModel)
-
 def coerce_to(model: Type[T], raw) -> T:
-    """
-    Convert *raw* (Pydantic model | dict | JSON-string) into *model*.
-
-    Raises ValidationError / JSONDecodeError if the payload is irreparably bad.
-    """
     if isinstance(raw, model):
         return raw
     if isinstance(raw, str):
@@ -122,7 +101,7 @@ async def ai_init(url: str, text: str) -> Site:
         "Based on the markup, decide which of the following scenarios applies and respond using **exactly** the JSON schema below.\n\n"
         "Scenario rules (mutually exclusive) – return **either** a non-empty `floorplans_url` **or** a non-empty `properties` list, never both:\n"
         "1. If *this* page already lists all floor-plans for the whole site, set `floorplans_url` to the **current URL** and leave `properties` empty.\n"
-        "2. If there is a single link that points to a page containing all floor-plans, set `floorplans_url` to that link and leave `properties` empty.\n"
+        "2. If there is a single link that points to a dedicated floor-plans page, choose the **shortest** link that ends with `/floorplans/` (relative paths like `/floorplans/` or `/apartments/floorplans/`), preferring those over longer links that include filenames such as `.aspx`. Set `floorplans_url` to that link and leave `properties` empty.\n"
         "3. Otherwise, if the website contains several *distinct buildings* (each with its own listings / floor-plans page), return those links in `properties`.\n"
         "   • Do **not** treat individual floor-plan types such as '1-Bedroom', '2-Bed 2-Bath', 'Studio', etc. as properties.\n"
         "   • Only add to `properties` if you find **two or more** real buildings. If there is only one, fall back to rule 2 and populate `floorplans_url` instead.\n"
@@ -131,6 +110,10 @@ async def ai_init(url: str, text: str) -> Site:
         "Important formatting rules:\n"
         "• If a link is a *relative* path (e.g. \"/floorplans/\"), convert it to an **absolute URL** by prefixing it with the scheme and host of the current URL before returning it.\n"
         "• Ensure the final output conforms to the provided JSON schema.\n"
+        "• If the page lacks suitable class names but you find that many listing\n"
+        "  elements have IDs whose static prefix is followed by digits (e.g. \n"
+        "  \"eg-3-post-id-15392_7723\"), build the selector with an attribute prefix\n"
+        "  selector: [id^='eg-3-post-id-'].\n"
     )
 
     init_response = client.beta.chat.completions.parse(
@@ -145,11 +128,7 @@ async def ai_init(url: str, text: str) -> Site:
         response_format=Site
     )
 
-    # The library is still experimental – depending on the version
-    # `message.content` may be a raw JSON string, a Python ``dict`` or
-    # an already-parsed ``Site`` instance.  Normalise to a ``Site``.
-
-    raw_content = init_response.choices[0].message.content  # type: ignore
+    raw_content = init_response.choices[0].message.content
 
     site = coerce_to(Site, raw_content)
 
@@ -169,7 +148,6 @@ async def ai_init(url: str, text: str) -> Site:
     # --------------------------------------------------------------
     # Heuristics to clean up incorrectly detected "properties"
     # --------------------------------------------------------------
-    import re
 
     def looks_like_floorplan(title: str) -> bool:
         """Return True if *title* resembles a floor-plan label, e.g. '2-Bedroom'."""
@@ -191,7 +169,7 @@ async def ai_init(url: str, text: str) -> Site:
         site.floorplans_url = promoted or ""
         site.properties = []
 
-    # Enforce mutual exclusivity just in case the model violated it.
+    # Enforce mutual exclusivity for floorplan v properties just in case the model violated it.
     if site.properties:
         site.floorplans_url = ""
     else:
@@ -199,7 +177,7 @@ async def ai_init(url: str, text: str) -> Site:
 
     return site
 
-async def init_container(url: str, text: str) -> str:
+async def init_container(url: str, text: str) -> List[str]:
     """Given the raw HTML of a *floor-plans page*, return a CSS selector that
     identifies the container element for *each* individual floor-plan.
 
@@ -213,41 +191,32 @@ async def init_container(url: str, text: str) -> str:
     prompt = (
         "You are given the HTML of a *floor-plans* page for an apartment site.\n\n"
         f"Current URL: {url}\n"
-        f"HTML: {text}\n\n"
-        "Find a single CSS selector that selects **one element per floor-plan" \
-        " listing**, where each selected element contains as much detail as\n" \
-        " possible about that listing (beds, baths, price, availability, sqft,\n" \
-        " deals, etc.).\n\n"
-        "Requirements:\n"
-        "• The selector MUST match *every* listing and nothing else.\n"
-        "• If the container elements have dynamic ids/prefixes (e.g. fp-124,\n"
-        "  fp-245) use an attribute prefix selector such as `div[id^='fp-']`.\n"
-        "• Prefer concise selectors with class/id attributes; avoid selectors\n"
-        "  that rely on absolute DOM hierarchy positions unless necessary.\n"
-        "• Output ONLY the selector string in your reply. No markdown, no extra\n"
-        "  text.\n"
+        "Your task: Propose up to **three** CSS selectors (ranked best-first) that, when applied via \n"
+        "`querySelectorAll`, each return **one element per floor-plan listing**.\n\n"
+        "Selector rules:\n"
+        "• Must capture as much detail for a single listing as possible (beds, price, sqft, etc.).\n"
+        "• If the elements have numeric IDs like `fp-124`, `fp-245`, use attribute patterns: `div[id^='fp-']`.\n"
+        "• DO NOT prefix element names with a dot (❌ `.div.foo`, ✅ `div.foo`).\n"
+        "• DO NOT prefix element names with a dot when matching ids (❌ `.a.bar`).\n"
+        "• Use single quotes inside attribute selectors.\n"
+        "• Return selectors in a JSON object of this exact shape:\n"
+        "  { \"selectors\": [ \"<css1>\", \"<css2>\", \"<css3>\" ] }\n"
+        "  – Provide 1-3 entries, no additional keys, no markdown.\n\n"
+        "HTML (truncated):\n" + text[:20000]
     )
 
-    completion = await asyncio.to_thread(
-        client.chat.completions.create,
+    init_response = await asyncio.to_thread(
+        client.beta.chat.completions.parse,
         model="gpt-4o-mini",
         messages=[
             {"role": "system", "content": "You are an expert web-scraping assistant"},
             {"role": "user", "content": prompt},
         ],
-        response_format={"type": "text"}  # raw text; we post-process into the model
+        response_format=SelectorList,
     )
 
-    raw_selector = completion.choices[0].message.content.strip()
-
-    # Validate minimal sanity: non-empty and no whitespace-only string.
-    if not raw_selector:
-        raise ValueError("GPT did not return a selector")
-
-    # Wrap into ContainerSelector for type safety (will raise if invalid).
-    selector_obj = ContainerSelector(selector=raw_selector)
-
-    return selector_obj.selector
+    raw = init_response.choices[0].message.content  # type: ignore
+    return coerce_to(SelectorList, raw).selectors
 
 
 
@@ -285,4 +254,91 @@ async def ai_parse_listings(url: str, containers: List[str]) -> List[Listing]:
 
 class ListingsWrapper(BaseModel):
     listings: List[Listing]
+
+
+async def ai_parse_listing_snapshots(url: str, containers: List[str]) -> List[ListingSnapshot]:
+    """Return a ListingSnapshot object extracted by GPT from *container*."""
+
+    joined = "\n\n--- CONTAINER ---\n\n".join(containers)
+
+    prompt = (
+        "You are given HTML snippets, each representing a single floor-plan listing "
+        "on a real-estate website (URL shown below). Parse every snippet and build "
+        "a list of ListingSnapshot objects that follow the provided schema exactly. "
+        "Return ONLY the list—no extra keys or wrapper.\n\n"
+        f"Current URL: {url}\n\n"
+        "HTML snippets (one per listing, separated by \"--- CONTAINER ---\"):\n\n"
+        f"{joined}\n\n"
+    )
+
+    init_response = await asyncio.to_thread(
+        client.beta.chat.completions.parse,
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "You are an expert web-scraping assistant"},
+            {"role": "user", "content": prompt},
+        ],
+        response_format=ListingSnapshotWrapper,
+    )
+
+    wrapper = coerce_to(ListingSnapshotWrapper, init_response.choices[0].message.content)
+    return wrapper.listing_snapshots
  
+class ListingSnapshotWrapper(BaseModel):
+    listing_snapshots: List[ListingSnapshot]
+
+
+# ---------------------------------------------------------------------------
+#   Selector post-processing utilities
+# ---------------------------------------------------------------------------
+
+
+def sanitize_selector(selector: str) -> str:
+    """Return *selector* with common GPT mistakes fixed.
+
+    Fixes:
+    1. Leading dot before element name (".div.foo" -> "div.foo").
+    2. Leading dot before element with id/class when element omitted (".a.bar" -> "a.bar").
+    3. Strips surrounding whitespace.
+    """
+
+    sel = selector.strip()
+
+    # Replace .div or .span etc. at start with div/span
+    sel = re.sub(r"^\.([a-zA-Z]+)([.#])", r"\1\2", sel)
+
+    # Replace .element when element is followed by class/id part, `.a.class` -> `a.class`
+    sel = re.sub(r"^\.([a-zA-Z][a-zA-Z0-9_-]*)", r"\1", sel)
+
+    sel = sel.replace('"', "'")
+
+    return sel
+
+# --------------------------- heuristic selector ---------------------------
+
+async def heuristic_id_prefix_selector(page) -> Optional[str]:
+    """Inspect the DOM and return a prefix-based selector if multiple IDs share it."""
+
+    ids: List[str] = await page.eval_on_selector_all(
+        "[id]",
+        "els => els.map(e => e.id).slice(0, 500)"  # limit to avoid huge payload
+    )
+
+    from collections import Counter
+
+    prefix_counter: Counter[str] = Counter()
+
+    for id_val in ids:
+        m = re.match(r"^(.*?post-id-)", id_val)
+        if m:
+            prefix_counter[m.group(1)] += 1
+
+    if not prefix_counter:
+        return None
+
+    prefix, count = prefix_counter.most_common(1)[0]
+    if count < 3:
+        return None
+
+    return f"[id^='{prefix}']"
+

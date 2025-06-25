@@ -10,9 +10,10 @@ CREATE TABLE `site` (
   `first_visit` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
   `deals` text,
   `amenities` text,
-  `state` varchar(2),
+  `state` varchar(255),
   `address` varchar(255),
   `container_selector` varchar(255),
+  `listing_count` int,
   PRIMARY KEY (`id`)
 );
 
@@ -26,6 +27,7 @@ CREATE TABLE `property` (
   `amenities` text,
   `address` varchar(255),
   `container_selector` varchar(255),
+  `listing_count` int,
   PRIMARY KEY (`id`),
   KEY `site_id` (`site_id`),
   CONSTRAINT `property_ibfk_1` FOREIGN KEY (`site_id`) REFERENCES `site` (`id`) ON DELETE CASCADE
@@ -43,7 +45,6 @@ CREATE TABLE `listing` (
   `sqft` varchar(255) DEFAULT NULL,
   `shared_room` tinyint(1) DEFAULT NULL,
   `amenities` text,
-  `description` text,
   PRIMARY KEY (`id`),
   UNIQUE KEY `unique_listing` (`site_id`,`listname`),
   KEY `property_id` (`property_id`),
@@ -59,9 +60,7 @@ CREATE TABLE `listing_snapshot` (
   `time_checked` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
   `availability` varchar(255) DEFAULT NULL,
   `price` varchar(255) DEFAULT NULL,
-  `price_per_sqft` varchar(255) DEFAULT NULL,
-  `description` text,
-  `original_price` varchar(255) DEFAULT NULL,
+  `pre_deal_price` varchar(255) DEFAULT NULL,
   `deals` varchar(255) DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `listing_id` (`listing_id`),
