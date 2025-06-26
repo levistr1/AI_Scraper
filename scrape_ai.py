@@ -49,7 +49,7 @@ class Listing(BaseModel):
 class ListingSnapshot(BaseModel):
     listname: str = Field(description="Exactly the same listname used in the parent Listing table (acts as foreign-key lookup)")
     availability: str = Field(description="Availability of the listing")
-    price: str = Field(description="Current price OR price range of the listing, Format for price range: 1000 - 1200 Format for single price: 1000")
+    price: str = Field(description="Current price OR price range of the listing")
     pre_deal_price: Optional[str] = Field(description="Price of the listing before any deals, may be slashed through")
     deals: Optional[str] = Field(description="Any deals the listing has, may be sign up deals, move in deals, etc.")
 
@@ -106,6 +106,7 @@ async def ai_init(url: str, text: str) -> Site:
         "   • Do **not** treat individual floor-plan types such as '1-Bedroom', '2-Bed 2-Bath', 'Studio', etc. as properties.\n"
         "   • Only add to `properties` if you find **two or more** real buildings. If there is only one, fall back to rule 2 and populate `floorplans_url` instead.\n"
         "   • For each valid property, fill only the `floorplans_url` field (other fields may be left blank). Set the top-level `floorplans_url` to an empty string when you return `properties`.\n"
+        "   • **Heuristic**: Any URL whose path contains the word 'floorplan' or 'floorplans' almost certainly points to the site's floor-plans page—treat it according to rule 2 and **never** put it under `properties`.\n"
         "4. If none of the above apply, return an empty object.\n\n"
         "Important formatting rules:\n"
         "• If a link is a *relative* path (e.g. \"/floorplans/\"), convert it to an **absolute URL** by prefixing it with the scheme and host of the current URL before returning it.\n"
@@ -265,6 +266,7 @@ async def ai_parse_listing_snapshots(url: str, containers: List[str]) -> List[Li
         "You are given HTML snippets, each representing a single floor-plan listing "
         "on a real-estate website (URL shown below). Parse every snippet and build "
         "a list of ListingSnapshot objects that follow the provided schema exactly. "
+        "There should be ONLY ONE ListingSnapshot object for each floor-plan listing."
         "Return ONLY the list—no extra keys or wrapper.\n\n"
         f"Current URL: {url}\n\n"
         "HTML snippets (one per listing, separated by \"--- CONTAINER ---\"):\n\n"

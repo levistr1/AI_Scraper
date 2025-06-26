@@ -2,4 +2,10 @@ INSERT INTO site (name, url) VALUES ('Arbor Landings', 'https://www.arborlanding
 INSERT INTO site (name, url) VALUES ('Hoover Greene', 'https://hooverandgreene.com/');
 INSERT INTO site (name, url) VALUES ('Z Place', 'https://www.zplaceapartments.com/');
 INSERT INTO site (name, url) VALUES ('Arbor Village', 'https://avapts.com/');
-INSERT INTO site (name, url) VALUES ('University Trails', 'https://www.universitytrailsapts.com/');
+-- INSERT INTO site (name, url) VALUES ('University Trails', 'https://www.universitytrailsapts.com/');
+INSERT INTO site (name, url) VALUES ('Island Drive', 'https://www.islanddriveapts.com/');
+INSERT INTO site (name, url) VALUES ('Avant', 'https://www.avantannarbor.com/');
+INSERT INTO site (name, url) VALUES ('Hidden Valley Club', 'https://www.hvca2.com/');
+INSERT INTO site (name, url) VALUES ('Huron Vista', 'https://www.huronvista.com/');
+INSERT INTO site (name, url) VALUES ('Spice Tree', 'https://spicetreeannarbor.com/');
+INSERT INTO site (name, url) VALUES ('Fairway Trails', 'https://www.fairwaytrails.com/');

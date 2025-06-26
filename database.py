@@ -142,7 +142,7 @@ class Database:
         cursor = self.connection.cursor()
         sql = (
             "INSERT INTO listing_snapshot "
-            "(listing_id, availability, price, pre_deal_price, deals) "
+            "(listing_id, availability, price, pre_deal_price, deals)"
             "VALUES (%s,%s,%s,%s,%s)"
         )
 
@@ -270,3 +270,16 @@ class Database:
         row = cursor.fetchone()
         return row[0] if row else None
 
+
+    def previously_visited(self, site_id: int):
+        cursor = self.connection.cursor(dictionary=True)
+        cursor.execute("SELECT id from property where site_id = %s", (site_id,))
+        property = cursor.fetchone()
+        junk = cursor.fetchall()
+        cursor.execute("SELECT floorplans_url from site where id = %s", (site_id,))
+        floorplans_url = cursor.fetchone()
+        junk2 = cursor.fetchall()
+        if property is None and floorplans_url['floorplans_url'] is None:
+            return False
+        else:
+            return True

@@ -16,35 +16,44 @@ async def main():
     db = Database()
     db.connect()
 
+    # Limit the number of browsers that can be spawned at the same time
+    semaphore = asyncio.Semaphore(5)
+
     sites = db.get_all_sites()
-    await init_all_sites(sites)
+    await init_all_sites(sites, semaphore)
 
     floorplans = db.get_floorplan_urls()
-    await scrape_all_fp(floorplans)
+    await scrape_all_fp(floorplans, semaphore)
 
     db.close()
 
 
 
-async def init_all_sites(sites):
-    tasks = [init_site(site) for site in sites if not previously_visited(site["id"])]
-    await asyncio.gather(*tasks)
+async def init_all_sites(sites, sem):
+    db = Database()
+    db.connect()
+    tasks = [init_site(site, sem) for site in sites if not db.previously_visited(site["id"])]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for r in results:
+        if isinstance(r, Exception):
+            print("init_site failed:", r)
     
-async def init_site(site):
+async def init_site(site, sem):
     db = Database()
     db.connect()
     print("Initializing site: " + site["name"])
-    nav = Navigator()
-    await nav.setup()
-    await nav.get_page(site["url"])
-    try:
-        text = await nav.get_text()
-        site_obj = await scrape_ai.ai_init(site["url"], text)
-    except Exception as e:
-        print(e)
-        return
-    finally:
-        await nav.close()
+    async with sem:
+        nav = Navigator()
+        await nav.setup()
+        await nav.get_page(site["url"])
+        try:
+            text = await nav.get_text()
+            site_obj = await scrape_ai.ai_init(site["url"], text)
+        except Exception as e:
+            print(e)
+            return
+        finally:
+            await nav.close()
     print(site["name"])
     id = site["id"]
     print(site_obj)
@@ -53,17 +62,21 @@ async def init_site(site):
 
 
 
-async def scrape_all_fp(floorplans):
+async def scrape_all_fp(floorplans, sem):
     
-    tasks = [scrape_fp(fp) for fp in floorplans]
-    await asyncio.gather(*tasks)
+    tasks = [scrape_fp(fp, sem) for fp in floorplans]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for r in results:
+        if isinstance(r, Exception):
+            print("task failed:", r)
 
-async def scrape_fp(floorplan):
+async def scrape_fp(floorplan, sem):
     db = Database()
     db.connect()
-    nav = Navigator()
-    await nav.setup()
-    await nav.get_page(floorplan.url)
+    async with sem:
+        nav = Navigator()
+        await nav.setup()
+        await nav.get_page(floorplan.url)
 
     # Check to see if we have a selector saved in DB
     selector = db.get_selector(floorplan.site_id, floorplan.property_id)
@@ -85,7 +98,7 @@ async def scrape_fp(floorplan):
                 # Check if the selector is valid
                 await nav.page.wait_for_selector(cand, timeout=5000)
                 elems = await nav.page.query_selector_all(cand)
-                if 0 < len(elems) <= 100:
+                if 1 < len(elems) <= 50:
                     chosen = cand
                     break
             except Exception:
@@ -150,18 +163,7 @@ async def scrape_fp(floorplan):
 
 
 
-def previously_visited(site_id: int):
-    db = Database()
-    db.connect()
-    cursor = db.connection.cursor(dictionary=True)
-    cursor.execute("SELECT id from property where site_id = %s", (site_id,))
-    property = cursor.fetchone()
-    cursor.execute("SELECT floorplans_url from site where id = %s", (site_id,))
-    floorplans_url = cursor.fetchone()
-    if property is None and floorplans_url['floorplans_url'] is None:
-        return False
-    else:
-        return True
+
 
 
 

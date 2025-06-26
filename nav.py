@@ -15,10 +15,13 @@ class Navigator:
         self.browser = await self.playwright.chromium.launch(headless=True)
         print("browser launched")
 
-    async def get_page(self, url: str):
+    async def get_page(self, url: str, *, timeout_ms: int = 30000):
         self.page = await self.browser.new_page()
-        await self.page.goto(url)
-        print("page loaded")
+        try:
+            await self.page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
+        except Exception as e:
+            print(f"[goto-timeout] {url} → {e}")
+            raise            # or return None / custom error
         return self.page
     
     async def get_links(self):
