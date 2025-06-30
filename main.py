@@ -156,7 +156,7 @@ async def scrape_fp(floorplan, sem):
     except Exception as e:
         print(f"Error scraping listings for {floorplan.url}: {e}")
     finally:
-        await nav.close()
+        await nav.close()   
         db.close()
 
 
