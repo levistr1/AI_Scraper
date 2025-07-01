@@ -1,0 +1,9 @@
+
+regex_patterns = {
+    "floorplan": r"/#?floor-?plans?/?",
+    "bedrooms": r"(?i)(?:beds?:?|bd:?)?[\s\u00A0]*?(studio|\d{1})[\s\u00A0]*?(?:beds?|bd)?",
+    "bathrooms": r"(?i)(?:baths?:?|ba:?)?[\s\u00A0]*?(\d{1})[\s\u00A0]*?(?:baths?|ba)?",
+    "sqft": r"(?i)(?:sq.?\s*ft.?\s*:?)?[\s\u00A0]*?(\d+)[\s\u00A0]*?(?:sq.?\s*ft.?\s*)?",
+    "price": r"\$\s*([\d,]+(?:\.\d{2})?)\s*(?:[-–]|to\s*[-–]?)?\s*\$?\s*([\d,]+(?:\.\d{2})?)?",
+    "availability": r"(?i)(\d)\s*Available"
+}

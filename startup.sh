@@ -12,7 +12,11 @@ else
 fi
 
 # Activate
-source env/bin/activate
+if [ -z "$VIRTUAL_ENV" ]; then  
+    source env/bin/activate
+else
+    echo "Virtual environment already activated $VIRTUAL_ENV"
+fi
 
 # Install requirements
 pip install -r requirements.txt

@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 import scrape_ai
 from database import Database
 from nav import Navigator
+from match import Match
 import normalize
 import asyncio
 
@@ -23,7 +24,7 @@ async def main():
     await init_all_sites(sites, semaphore)
 
     floorplans = db.get_floorplan_urls()
-    await scrape_all_fp(floorplans, semaphore)
+    #await scrape_all_fp(floorplans, semaphore)
 
     db.close()
 
@@ -41,6 +42,7 @@ async def init_all_sites(sites, sem):
 async def init_site(site, sem):
     db = Database()
     db.connect()
+    mat = Match()
     print("Initializing site: " + site["name"])
     async with sem:
         nav = Navigator()
@@ -48,16 +50,26 @@ async def init_site(site, sem):
         await nav.get_page(site["url"])
         try:
             text = await nav.get_text()
-            site_obj = await scrape_ai.ai_init(site["url"], text)
+            links = await nav.get_links()
+            # print(links)
+            link = mat.match_fp(site["url"], links)
+            regex_filled = {}
+            if link:
+                print(link)
+                regex_filled.update({"floorplans_url": link})
+            
+            ai_filled = await scrape_ai.ai_init(site["url"], text, regex_filled)
+            site_data = {**ai_filled, **regex_filled}
         except Exception as e:
+            print("init exception")
             print(e)
             return
         finally:
             await nav.close()
     print(site["name"])
     id = site["id"]
-    print(site_obj)
-    db.insert_site(id, site_obj)
+    print(site_data)
+    db.insert_site(id, site_data)
     db.close()
 
 
@@ -78,7 +90,49 @@ async def scrape_fp(floorplan, sem):
         await nav.setup()
         await nav.get_page(floorplan.url)
 
-    # Check to see if we have a selector saved in DB
+    selector = selector(floorplan, nav, db)
+    if selector == None:
+        return
+    
+    # Number of listings on page with that selector 
+    count = await nav.page.locator(selector).count()
+
+    # Number of listings in DB with that selector
+    prev_count = db.get_listing_count(floorplan.site_id, floorplan.property_id)
+
+    
+    try:
+        # Get text from inside all listing containers
+        await nav.page.wait_for_selector(selector)
+        elements = await nav.page.query_selector_all(selector)
+        snippets = [await el.inner_html() for el in elements]
+
+        if not snippets:
+            print(f"No listing containers found for {floorplan.url} with selector {selector}")
+            return
+        if prev_count is None or prev_count != count:
+
+            listings = await scrape_ai.ai_parse_listings(floorplan.url, snippets)
+            if listings:
+                db.insert_listings(floorplan.site_id, floorplan.property_id, listings)
+                db.update_listing_count(floorplan.site_id, floorplan.property_id, count)
+                print(f"Inserted {len(listings)} listings for site {floorplan.site_id}")
+            else: 
+                print(f"AI returned no listings for {floorplan.url}")
+                
+        listing_snapshots = await scrape_ai.ai_parse_listing_snapshots(floorplan.url, snippets)
+        db.insert_listing_snapshots(floorplan.site_id, floorplan.property_id, listing_snapshots)
+        print(f"Inserted {len(listing_snapshots)} listing snapshots for site {floorplan.site_id}")
+        
+    except Exception as e:
+        print(f"Error scraping listings for {floorplan.url}: {e}")
+    finally:
+        await nav.close()   
+        db.close()
+
+
+
+async def selector(floorplan, nav: Navigator, db: Database):
     selector = db.get_selector(floorplan.site_id, floorplan.property_id)
     if not selector:
         # If not, use GPT to find a selector
@@ -118,54 +172,22 @@ async def scrape_fp(floorplan, sem):
 
         if not chosen:
             print(f"No valid selector found for {floorplan.url}")
-            await nav.close(); db.close(); return
+            await nav.close(); db.close(); return None
 
         # Save the selector to the DB
         selector = chosen
         db.save_selector(selector, floorplan.site_id, floorplan.property_id)
         print(f"Selector discovered and saved: {selector}")
-    
-    # Number of listings on page with that selector 
-    count = await nav.page.locator(selector).count()
-    # Number of listings in DB with that selector
-    prev_count = db.get_listing_count(floorplan.site_id, floorplan.property_id)
+        return selector
 
-    
-    try:
-        # Get text from inside all listing containers
-        await nav.page.wait_for_selector(selector)
-        elements = await nav.page.query_selector_all(selector)
-        snippets = [await el.inner_html() for el in elements]
 
-        if not snippets:
-            print(f"No listing containers found for {floorplan.url} with selector {selector}")
-            return
-        if prev_count is None or prev_count != count:
-            listings = await scrape_ai.ai_parse_listings(floorplan.url, snippets)
-            if listings:
-                db.insert_listings(floorplan.site_id, floorplan.property_id, listings)
-                db.update_listing_count(floorplan.site_id, floorplan.property_id, count)
-                print(f"Inserted {len(listings)} listings for site {floorplan.site_id}")
-            else: 
-                print(f"AI returned no listings for {floorplan.url}")
-                
-        listing_snapshots = await scrape_ai.ai_parse_listing_snapshots(floorplan.url, snippets)
-        db.insert_listing_snapshots(floorplan.site_id, floorplan.property_id, listing_snapshots)
-        print(f"Inserted {len(listing_snapshots)} listing snapshots for site {floorplan.site_id}")
+
+async def get_listings(floorplan, listing_text):
+    mat = Match()
+    listings = []
+    for lt in listing_text:
+        l = mat.match_listing(lt)
         
-    except Exception as e:
-        print(f"Error scraping listings for {floorplan.url}: {e}")
-    finally:
-        await nav.close()   
-        db.close()
-
-
-
-
-
-
-
-
 
 if __name__ == "__main__":
     asyncio.run(main())

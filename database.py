@@ -58,14 +58,14 @@ class Database:
     # Insert / Update 
     # --------------------------------------------------------------
         
-    def insert_site(self, site_id: int, site: Site):
+    def insert_site(self, site_id: int, site: dict):
         cursor = self.connection.cursor()
 
         # 1) Update floor-plans URL if provided.
-        if site.floorplans_url:
+        if site["floorplans_url"] is not None:
             cursor.execute(
                 "UPDATE site SET floorplans_url = %s WHERE id = %s",
-                (site.floorplans_url, site_id),
+                (site["floorplans_url"], site_id),
             )
 
         # 2) Update descriptive fields (skip NULLs so we don't overwrite).
@@ -73,12 +73,10 @@ class Database:
             "UPDATE site SET address = COALESCE(%s,address), "
             "state = COALESCE(%s,state), amenities = COALESCE(%s,amenities), "
             "deals = COALESCE(%s,deals) WHERE id = %s",
-            (site.address, site.state, site.amenities, site.deals, site_id),
+            (site["address"], site["state"], site["amenities"], site["deals"], site_id),
         )
 
         # 3) If there are child properties, ensure they exist in the DB.
-        if site.properties:
-            self.insert_properties(site_id, site)
 
         self.connection.commit()
 
