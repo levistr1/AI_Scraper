@@ -106,28 +106,26 @@ class Database:
     def insert_listings(
         self,
         site_id: int,
-        property_id: Optional[int],
-        listings: List[Listing],
+        listings: List[dict],
     ) -> None:
         """Bulk-insert Listing rows, skip duplicates via INSERT IGNORE."""
 
         cursor = self.connection.cursor()
         sql = (
             "INSERT IGNORE INTO listing "
-            "(site_id, property_id, listname, bedrooms, bathrooms, sqft, shared_room, amenities) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)"
+            "(site_id, listname, bedrooms, bathrooms, sqft, shared_room, amenities) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s)"
         )
 
         data = [
             (
                 site_id,
-                property_id,
-                l.listname,
-                l.bedrooms,
-                l.bathrooms,
-                l.sqft,
-                int(l.shared_room) if l.shared_room is not None else None,
-                l.amenities,
+                l["listname"],
+                l["bedrooms"],
+                l["bathrooms"],
+                l["sqft"],
+                int(l["shared_room"]) if l["shared_room"] is not None else None,
+                l["amenities"],
 
             )
             for l in listings
@@ -136,7 +134,7 @@ class Database:
         cursor.executemany(sql, data)
         self.connection.commit()
 
-    def insert_listing_snapshots(self, site_id: int, property_id: Optional[int], snaps: List[ListingSnapshot]):
+    def insert_listing_snapshots(self, site_id: int, snaps: List[dict]):
         cursor = self.connection.cursor()
         sql = (
             "INSERT INTO listing_snapshot "
@@ -146,10 +144,10 @@ class Database:
 
         data = []
         for s in snaps:
-            listing_id = self.lookup_listing_id(site_id, property_id, s.listname)
+            listing_id = self.lookup_listing_id(site_id, s["listname"])
             if listing_id is None:
                 continue  # listing not yet in table
-            data.append((listing_id, s.availability, norm.normalize_price(s.price), s.pre_deal_price, s.deals))
+            data.append((listing_id, ["availability"], norm.normalize_price(s["price"]), s["pre_deal_price"], s["deals"]))
 
         if data:
             cursor.executemany(sql, data)
@@ -253,17 +251,12 @@ class Database:
         row = cursor.fetchone()
         return row[0] if row else None
 
-    def lookup_listing_id(self, site_id: int, property_id: Optional[int], listname: str) -> Optional[int]:
+    def lookup_listing_id(self, site_id: int, listname: str) -> Optional[int]:
         cursor = self.connection.cursor()
-        if property_id is None:
-            cursor.execute(
-                "SELECT id FROM listing WHERE site_id = %s AND property_id IS NULL AND listname = %s",
-                (site_id, listname),
-            )
-        else:
-            cursor.execute(
-                "SELECT id FROM listing WHERE site_id = %s AND property_id = %s AND listname = %s",
-                (site_id, property_id, listname),
+        
+        cursor.execute(
+            "SELECT id FROM listing WHERE site_id = %s AND listname = %s",
+            (site_id, listname),
             )
         row = cursor.fetchone()
         return row[0] if row else None

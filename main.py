@@ -24,7 +24,7 @@ async def main():
     await init_all_sites(sites, semaphore)
 
     floorplans = db.get_floorplan_urls()
-    #await scrape_all_fp(floorplans, semaphore)
+    await scrape_all_fp(floorplans, semaphore)
 
     db.close()
 
@@ -90,7 +90,7 @@ async def scrape_fp(floorplan, sem):
         await nav.setup()
         await nav.get_page(floorplan.url)
 
-    selector = selector(floorplan, nav, db)
+    selector = select(floorplan, nav, db)
     if selector == None:
         return
     
@@ -111,18 +111,18 @@ async def scrape_fp(floorplan, sem):
             print(f"No listing containers found for {floorplan.url} with selector {selector}")
             return
         if prev_count is None or prev_count != count:
+            listings = get_listings(floorplan, snippets)
 
-            listings = await scrape_ai.ai_parse_listings(floorplan.url, snippets)
             if listings:
-                db.insert_listings(floorplan.site_id, floorplan.property_id, listings)
+                db.insert_listings(floorplan.site_id, listings)
                 db.update_listing_count(floorplan.site_id, floorplan.property_id, count)
                 print(f"Inserted {len(listings)} listings for site {floorplan.site_id}")
             else: 
                 print(f"AI returned no listings for {floorplan.url}")
                 
-        listing_snapshots = await scrape_ai.ai_parse_listing_snapshots(floorplan.url, snippets)
-        db.insert_listing_snapshots(floorplan.site_id, floorplan.property_id, listing_snapshots)
-        print(f"Inserted {len(listing_snapshots)} listing snapshots for site {floorplan.site_id}")
+        snapshots = get_snapshots(floorplan, snippets)
+        db.insert_listing_snapshots(floorplan.site_id, snapshots)
+        print(f"Inserted {len(snapshots)} listing snapshots for site {floorplan.site_id}")
         
     except Exception as e:
         print(f"Error scraping listings for {floorplan.url}: {e}")
@@ -132,7 +132,7 @@ async def scrape_fp(floorplan, sem):
 
 
 
-async def selector(floorplan, nav: Navigator, db: Database):
+async def select(floorplan, nav: Navigator, db: Database):
     selector = db.get_selector(floorplan.site_id, floorplan.property_id)
     if not selector:
         # If not, use GPT to find a selector
@@ -142,7 +142,7 @@ async def selector(floorplan, nav: Navigator, db: Database):
             # Get 3 candidates, ranked best first
         except Exception as e:
             print(f"Failed to get selector candidates for {floorplan.url}: {e}")
-            await nav.close(); db.close(); return
+            await nav.close(); db.close(); return None
 
         # Try each candidate until one works
         chosen = None
@@ -185,8 +185,27 @@ async def selector(floorplan, nav: Navigator, db: Database):
 async def get_listings(floorplan, listing_text):
     mat = Match()
     listings = []
+    
     for lt in listing_text:
-        l = mat.match_listing(lt)
+        regex_listing = mat.match_listing(lt)
+        ai_listing = scrape_ai.ai_parse_listings(lt, regex_listing)
+        listing = {**ai_listing, **regex_listing}
+        listings.append(listing)
+    return listings
+
+        
+async def get_snapshots(floorplan, snapshot_text):
+    mat = Match()
+    snapshots = []
+
+    for st in snapshot_text:
+        regex_snapshot = mat.match_snapshot(st)
+        ai_snapshot = scrape_ai.ai_parse_listing_snapshots(st, regex_snapshot)
+        listing_snapshot = {**ai_snapshot, **regex_snapshot}
+        snapshots.append(listing_snapshot)
+    return snapshots
+
+        
         
 
 if __name__ == "__main__":

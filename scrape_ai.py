@@ -15,43 +15,43 @@ from urllib.parse import urljoin
 # Local
 from nav import Navigator
 
-class Property(BaseModel):
-    title: str
-    amenities: str
-    state: str
-    address: str
-    floorplans_url: Optional[str] = Field(
-        description="URL for the floor-plans of this specific property")
+# class Property(BaseModel):
+#     title: str
+#     amenities: str
+#     state: str
+#     address: str
+#     floorplans_url: Optional[str] = Field(
+#         description="URL for the floor-plans of this specific property")
 
 
-class Site(BaseModel):  
-    deals: str
-    amenities: str
-    state: Optional[str] = Field(
-        description="State where this apartment complex is located")
-    address: Optional[str] = Field(description="Street address")
-    floorplans_url: str = Field(
-        description="URL for the *site's* general floor-plans page")
-    properties: List[Property] = Field(
-        default_factory=list,
-        description="All individual buildings / addresses that belong to this site")
+# class Site(BaseModel):  
+#     deals: str
+#     amenities: str
+#     state: Optional[str] = Field(
+#         description="State where this apartment complex is located")
+#     address: Optional[str] = Field(description="Street address")
+#     floorplans_url: str = Field(
+#         description="URL for the *site's* general floor-plans page")
+#     properties: List[Property] = Field(
+#         default_factory=list,
+#         description="All individual buildings / addresses that belong to this site")
 
 
-class Listing(BaseModel):
-    listname: str = Field(description="Name of the listing")
-    bedrooms: int = Field(description="Number of bedrooms")
-    bathrooms: int = Field(description="Number of bathrooms")
-    sqft: int = Field(description="Square footage")
-    shared_room: bool = Field(description="Whether the listing is a shared room")
-    amenities: Optional[str] = Field(description="Any amenities the listing has")
+# class Listing(BaseModel):
+#     listname: str = Field(description="Name of the listing")
+#     bedrooms: int = Field(description="Number of bedrooms")
+#     bathrooms: int = Field(description="Number of bathrooms")
+#     sqft: int = Field(description="Square footage")
+#     shared_room: bool = Field(description="Whether the listing is a shared room")
+#     amenities: Optional[str] = Field(description="Any amenities the listing has")
 
 
-class ListingSnapshot(BaseModel):
-    listname: str = Field(description="Exactly the same listname used in the parent Listing table (acts as foreign-key lookup)")
-    availability: str = Field(description="Availability of the listing")
-    price: str = Field(description="Current price OR price range of the listing")
-    pre_deal_price: Optional[str] = Field(description="Price of the listing before any deals, may be slashed through")
-    deals: Optional[str] = Field(description="Any deals the listing has, may be sign up deals, move in deals, etc.")
+# class ListingSnapshot(BaseModel):
+#     listname: str = Field(description="Exactly the same listname used in the parent Listing table (acts as foreign-key lookup)")
+#     availability: str = Field(description="Availability of the listing")
+#     price: str = Field(description="Current price OR price range of the listing")
+#     pre_deal_price: Optional[str] = Field(description="Price of the listing before any deals, may be slashed through")
+#     deals: Optional[str] = Field(description="Any deals the listing has, may be sign up deals, move in deals, etc.")
 
 
 class SelectorList(BaseModel):
@@ -82,7 +82,7 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 # --- Core helper -----------------------------------------------------------
 
 
-async def ai_init(url: str, text: str, filled: dict) -> Site:
+async def ai_init(url: str, text: str, filled: dict) -> dict:
     """Return a populated `Site` object after asking GPT to analyse *url*.
 
     GPT is instructed to decide which of these situations applies:
@@ -116,6 +116,9 @@ async def ai_init(url: str, text: str, filled: dict) -> Site:
 
     for key in filled.keys():
         props.pop(key, None)
+
+    if not props:
+        return {}
 
     prompt = (
         "You are given the raw HTML of a real-estate website page together with its URL.\n\n"
@@ -218,17 +221,7 @@ async def init_container(url: str, text: str) -> List[str]:
 
 
 
-async def ai_parse_listings(url: str, containers: List[str]) -> List[Listing]:
-    """Return a list of Listing objects extracted by GPT from *containers*.
-
-    Each element in *containers* is the raw HTML for one floor-plan card.
-    """
-    listname: str = Field(description="Name of the listing")
-    bedrooms: int = Field(description="Number of bedrooms")
-    bathrooms: int = Field(description="Number of bathrooms")
-    sqft: int = Field(description="Square footage")
-    shared_room: bool = Field(description="Whether the listing is a shared room")
-    amenities: Optional[str] = Field(description="Any amenities the listing has")
+async def ai_parse_listings(container: str, filled: dict) -> dict:
 
     props = {
         "listname": {
@@ -257,16 +250,21 @@ async def ai_parse_listings(url: str, containers: List[str]) -> List[Listing]:
         }
     }
 
-    joined = "\n\n--- CONTAINER ---\n\n".join(containers)
+    for key, value in filled.items():
+        if value != None:
+            props.pop(key, None)
+
+    if not props:
+        return {}
+
 
     prompt = (
-        "You are given HTML snippets, each representing a single floor-plan listing "
-        "on a real-estate website (URL shown below). Parse every snippet and build "
-        "a list of Listing objects that follow the provided schema exactly. "
+        "You are given an HTML snippet representing a single floor-plan listing "
+        "on a real-estate website. Parse the snippet and build "
+        "a JSON object that follow the provided schema exactly. "
         "Return ONLY the list—no extra keys or wrapper.\n\n"
-        f"Current URL: {url}\n\n"
-        "HTML snippets (one per listing, separated by \"--- CONTAINER ---\"):\n\n"
-        f"{joined}\n\n"
+        "HTML snippet:\n\n"
+        f"{container}\n\n"
     )
 
     init_response = await asyncio.to_thread(
@@ -276,31 +274,58 @@ async def ai_parse_listings(url: str, containers: List[str]) -> List[Listing]:
             {"role": "system", "content": "You are an expert web-scraping assistant"},
             {"role": "user", "content": prompt},
         ],
-        response_format=ListingsWrapper,
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "listing",
+                "schema": {
+                    "description": "Data from a real estate listing",
+                    "type": "object",
+                    "properties": props
+                }
+            }
+        }
     )
 
-    wrapper = coerce_to(ListingsWrapper, init_response.choices[0].message.content)
-    return wrapper.listings
+    raw_content = init_response.choices[0].message.content
+    ai_listing = json.loads(raw_content)
 
+    return ai_listing["properties"]
 
-class ListingsWrapper(BaseModel):
-    listings: List[Listing]
+    
 
-
-async def ai_parse_listing_snapshots(url: str, containers: List[str]) -> List[ListingSnapshot]:
+async def ai_parse_listing_snapshots(container: str, filled: dict) -> dict:
     """Return a ListingSnapshot object extracted by GPT from *container*."""
 
-    joined = "\n\n--- CONTAINER ---\n\n".join(containers)
+
+    props = {
+        "listname": {
+            "type": "string",
+            "description": "Name of the listing"
+        },
+        "availability": {
+            "type": "string",
+            "description": "Availability of the listing"
+        },
+        "price": {
+            "type": "string",
+            "description": "Current price OR price range of the unit"
+        }
+    }
+
+    for key, value in filled.items():
+        if value != None:
+            props.pop(key, None)
+
+    if not props:
+        return {}
 
     prompt = (
-        "You are given HTML snippets, each representing a single floor-plan listing "
-        "on a real-estate website (URL shown below). Parse every snippet and build "
-        "a list of ListingSnapshot objects that follow the provided schema exactly. "
-        "There should be ONLY ONE ListingSnapshot object for each floor-plan listing."
+        "You are given an HTML snippet, representing a single floor-plan listing "
+        "on a real-estate website. Parse the snippet and build "
+        "a JSON object that follow the provided schema exactly. "
         "Return ONLY the list—no extra keys or wrapper.\n\n"
-        f"Current URL: {url}\n\n"
-        "HTML snippets (one per listing, separated by \"--- CONTAINER ---\"):\n\n"
-        f"{joined}\n\n"
+        f"{container}\n\n"
     )
 
     init_response = await asyncio.to_thread(
@@ -310,14 +335,23 @@ async def ai_parse_listing_snapshots(url: str, containers: List[str]) -> List[Li
             {"role": "system", "content": "You are an expert web-scraping assistant"},
             {"role": "user", "content": prompt},
         ],
-        response_format=ListingSnapshotWrapper,
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "listing_snapshot",
+                "schema": {
+                    "description": "Data from a real estate listing snapshot",
+                    "type": "object",
+                    "properties": props
+                }
+            }
+        }
     )
 
-    wrapper = coerce_to(ListingSnapshotWrapper, init_response.choices[0].message.content)
-    return wrapper.listing_snapshots
- 
-class ListingSnapshotWrapper(BaseModel):
-    listing_snapshots: List[ListingSnapshot]
+    raw_content = init_response.choices[0].message.content
+    ai_listing_snapshot = json.loads(raw_content)
+
+    return ai_listing_snapshot["properties"]
 
 
 # ---------------------------------------------------------------------------
