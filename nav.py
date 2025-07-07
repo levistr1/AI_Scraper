@@ -12,7 +12,7 @@ class Navigator:
 
     async def setup(self):
         self.playwright = await async_playwright().start()
-        self.browser = await self.playwright.chromium.launch(headless=True)
+        self.browser = await self.playwright.chromium.launch(headless=False)
         print("browser launched")
 
     async def get_page(self, url: str, *, timeout_ms: int = 30000):

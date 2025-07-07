@@ -14,6 +14,7 @@ from urllib.parse import urljoin
 
 # Local
 from nav import Navigator
+from config import common_container_patterns, container_characteristics
 
 # class Property(BaseModel):
 #     title: str
@@ -128,25 +129,6 @@ async def ai_init(url: str, text: str, filled: dict) -> dict:
         "Ensure the final output conforms to the provided JSON schema.\n"
     )
 
-
-    fp_prompt = (
-        "Scenario rules (mutually exclusive) – return **either** a non-empty `floorplans_url` **or** a non-empty `properties` list, never both:\n"
-        "1. If *this* page already lists all floor-plans for the whole site, set `floorplans_url` to the **current URL** and leave `properties` empty.\n"
-        "2. If there is a single link that points to a dedicated floor-plans page, choose the **shortest** link that ends with `/floorplans/` (relative paths like `/floorplans/` or `/apartments/floorplans/`), preferring those over longer links that include filenames such as `.aspx`. Set `floorplans_url` to that link and leave `properties` empty.\n"
-        "3. Otherwise, if the website contains several *distinct buildings* (each with its own listings / floor-plans page), return those links in `properties`.\n"
-        "   • Do **not** treat individual floor-plan types such as '1-Bedroom', '2-Bed 2-Bath', 'Studio', etc. as properties.\n"
-        "   • Only add to `properties` if you find **two or more** real buildings. If there is only one, fall back to rule 2 and populate `floorplans_url` instead.\n"
-        "   • For each valid property, fill only the `floorplans_url` field (other fields may be left blank). Set the top-level `floorplans_url` to an empty string when you return `properties`.\n"
-        "   • **Heuristic**: Any URL whose path contains the word 'floorplan' or 'floorplans' almost certainly points to the site's floor-plans page—treat it according to rule 2 and **never** put it under `properties`.\n"
-        "4. If none of the above apply, return an empty object.\n\n"
-        "Important formatting rules:\n"
-        "• If a link is a *relative* path (e.g. \"/floorplans/\"), convert it to an **absolute URL** by prefixing it with the scheme and host of the current URL before returning it.\n"
-    )
-
-    if "floorplans_url" in props:
-        print(f"No floorplans_url found with regex for {url}, using AI model as fallback")
-        prompt += fp_prompt
-
     init_response = client.beta.chat.completions.parse(
         model="gpt-4o-mini",
         messages=[
@@ -172,7 +154,18 @@ async def ai_init(url: str, text: str, filled: dict) -> dict:
     raw_content = init_response.choices[0].message.content
     ai_initialized = json.loads(raw_content)
 
-    return ai_initialized["properties"]
+    try:
+        site = ai_initialized.get("properties", {})
+        if site:
+            print(f"site properties: {site}")
+            return site
+        else:
+            print("no site properties")
+            return ai_initialized
+
+    except:
+        print("AI could not find site info")
+        return {}
 
 async def init_container(url: str, text: str) -> List[str]:
     """Given the raw HTML of a *floor-plans page*, return a CSS selector that
@@ -184,33 +177,101 @@ async def init_container(url: str, text: str) -> List[str]:
     (e.g. ``#fp-124`` vs. ``#fp-245``) *are allowed*, in which case prefer a
     *pattern-based* selector like ``div[id^='fp-']``.
     """
+    
+    # Create examples string from our successful patterns, organized by type
+    class_patterns = [p for p in common_container_patterns if not p.startswith('[')]
+    id_patterns = [p for p in common_container_patterns if p.startswith('[id')]
+    other_patterns = [p for p in common_container_patterns if p.startswith('[') and not p.startswith('[id')]
+    
+    pattern_examples = (
+        "CLASS-BASED PATTERNS:\n" + "\n".join([f"  • {pattern}" for pattern in class_patterns[:8]]) + "\n\n" +
+        "ID-BASED PATTERNS:\n" + "\n".join([f"  • {pattern}" for pattern in id_patterns[:8]]) + "\n\n" +
+        "OTHER PATTERNS:\n" + "\n".join([f"  • {pattern}" for pattern in other_patterns[:4]])
+    )
+    
+    characteristics_list = "\n".join([f"  • {char}" for char in container_characteristics])
+    
+    # Debug: Show what patterns we're sending to AI
+    print(f"🤖 Sending proven patterns to AI for {url}")
+    print(f"   Class patterns: {len(class_patterns)} (first: {class_patterns[0] if class_patterns else 'none'})")
+    print(f"   ID patterns: {len(id_patterns)} (first: {id_patterns[0] if id_patterns else 'none'})")
+    print(f"   Other patterns: {len(other_patterns)}")
+    print()
 
     prompt = (
-        "You are given the HTML of a *floor-plans* page for an apartment site.\n\n"
-        f"Current URL: {url}\n"
-        "Your task: Propose up to **three** CSS selectors (ranked best-first) that, when applied via \n"
-        "`querySelectorAll`, each return **one element per floor-plan listing**.\n\n"
-        "Selector rules:\n"
-        "• Must capture as much detail for a single listing as possible (beds, price, sqft, etc.).\n"
-        "• If the elements have numeric IDs like `fp-124`, `fp-245`, use attribute patterns: `div[id^='fp-']`.\n"
-        "• DO NOT prefix element names with a dot (❌ `.div.foo`, ✅ `div.foo`).\n"
-        "• DO NOT prefix element names with a dot when matching ids (❌ `.a.bar`).\n"
-        "• Use single quotes inside attribute selectors.\n"
-        "• Return selectors in a JSON object of this exact shape:\n"
-        "  { \"selectors\": [ \"<css1>\", \"<css2>\", \"<css3>\" ] }\n"
-        "  – Provide 1-3 entries, no additional keys, no markdown.\n\n"
-        "• If the page lacks suitable class names but you find that many listing\n"
-        "  elements have IDs whose static prefix is followed by digits (e.g. \n"
-        "  \"eg-3-post-id-15392_7723\"), build the selector with an attribute prefix\n"
-        "  selector: [id^='eg-3-post-id-'].\n"
-        "HTML (truncated):\n" + text[:20000]
+        "You are an expert web scraper analyzing a floor-plans page. Your task is to find CSS selectors that identify individual floor plan listing containers.\n\n"
+        
+        f"CURRENT URL: {url}\n\n"
+        
+        "⚠️ CRITICAL: TEST ALL PROVEN PATTERN TYPES ⚠️\n"
+        "Before creating custom selectors, systematically check if ANY of these proven patterns work.\n"
+        "Each pattern type works on different sites - test ALL types, not just class-based patterns!\n\n"
+        
+        f"PROVEN SUCCESSFUL PATTERNS:\n{pattern_examples}\n\n"
+        
+        "PATTERN TESTING STRATEGY:\n"
+        "• Test class-based patterns (div.fp-card, div.floorplan, etc.)\n"
+        "• Test ID-based patterns ([id^='fp-'], [id^='eg-3-post-id'], etc.)\n"
+        "• Test data/other attribute patterns\n"
+        "• Only create custom selectors if NO proven patterns work\n"
+        "• Different sites use different pattern types - be thorough!\n\n"
+        
+        "ANALYSIS APPROACH:\n"
+        "1. FIRST: Systematically test ALL proven pattern types\n"
+        "2. Look for repeating structural patterns that contain floor plan information\n"
+        "3. Identify elements that wrap complete listing data together\n"
+        "4. Prefer selectors that capture multiple data points per listing\n"
+        "5. Avoid overly specific selectors that might break with minor changes\n\n"
+        
+        "GOOD CONTAINER CHARACTERISTICS (look for elements that contain):\n"
+        f"{characteristics_list}\n\n"
+        
+        "SELECTOR REQUIREMENTS:\n"
+        "• Each selector should return ONE element per floor plan listing when using querySelectorAll\n"
+        "• PREFER ANY proven patterns over custom selectors\n"
+        "• Must capture as much listing detail as possible (beds, baths, sqft, price, etc.)\n"
+        "• For numeric IDs like 'fp-124', 'fp-245', use patterns: [id^='fp-']\n"
+        "• For complex IDs like 'eg-3-post-id-15392_7723', use: [id^='eg-3-post-id-']\n"
+        "• DO NOT prefix elements with dots (❌ '.div.foo' ✅ 'div.foo')\n"
+        "• Use single quotes in attribute selectors\n"
+        "• Prefer semantic class names over generic ones\n"
+        "• Avoid overly complex descendant selectors unless absolutely necessary\n\n"
+        
+        "AVOID SELECTING:\n"
+        "• Navigation elements or page headers\n"
+        "• Individual data fields (price only, bedroom count only)\n"
+        "• Parent containers that hold ALL listings together\n"
+        "• Elements that appear only once on the page\n"
+        "• Overly generic selectors like 'div' or '.item'\n"
+        "• Complex multi-level descendant selectors when simple ones work\n\n"
+        
+        "ANALYSIS STEPS:\n"
+        "1. Look for class-based patterns: div.fp-card, div.floorplan, div.floor-plan\n"
+        "2. Look for ID patterns: [id^='fp-'], [id^='eg-3-post-id'], [id^='floorplan-']\n"
+        "3. Look for data attributes: [data-floorplan], [data-unit-type]\n"
+        "4. Only if NO proven patterns work, analyze for custom selectors\n"
+        "5. Look for class names with 'floor', 'plan', 'unit', 'apartment', 'listing'\n"
+        "6. Check for ID patterns with numeric suffixes\n"
+        "7. Examine the DOM structure for logical groupings\n"
+        "8. Validate each selector would capture complete listing information\n\n"
+        
+        "RESPONSE FORMAT:\n"
+        "Return a JSON object with this exact structure:\n"
+        '{ "selectors": ["<best_selector>", "<second_best>", "<third_best>"] }\n'
+        "• Provide 1-3 selectors ranked by confidence (best first)\n"
+        "• PRIORITIZE any working proven patterns over custom selectors\n"
+        "• Include different pattern types if multiple work\n"
+        "• No additional keys, no markdown, no explanations\n"
+        "• Each selector should be production-ready\n\n"
+        
+        f"HTML TO ANALYZE:\n{text}"
     )
 
     init_response = await asyncio.to_thread(
         client.beta.chat.completions.parse,
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "You are an expert web-scraping assistant"},
+            {"role": "system", "content": "You are an expert web-scraping assistant with deep knowledge of HTML structure and CSS selectors. You excel at finding robust, reliable selectors for apartment listing containers."},
             {"role": "user", "content": prompt},
         ],
         response_format=SelectorList,
@@ -239,14 +300,6 @@ async def ai_parse_listings(container: str, filled: dict) -> dict:
         "sqft": {
             "type": "string",
             "description": "Square feet of the apartment, record INT only"
-        },
-        "shared_room": {
-            "type": "string",
-            "description": "Whether this listing has a shared room"
-        },
-        "amenities": {
-            "type": "string",
-            "description": "Any amenities unique to the listing"
         }
     }
 
@@ -254,7 +307,9 @@ async def ai_parse_listings(container: str, filled: dict) -> dict:
         if value != None:
             props.pop(key, None)
 
+
     if not props:
+        print("AI not necessary listings")
         return {}
 
 
@@ -262,6 +317,7 @@ async def ai_parse_listings(container: str, filled: dict) -> dict:
         "You are given an HTML snippet representing a single floor-plan listing "
         "on a real-estate website. Parse the snippet and build "
         "a JSON object that follow the provided schema exactly. "
+        "Please find the name of the listing"
         "Return ONLY the list—no extra keys or wrapper.\n\n"
         "HTML snippet:\n\n"
         f"{container}\n\n"
@@ -289,8 +345,19 @@ async def ai_parse_listings(container: str, filled: dict) -> dict:
 
     raw_content = init_response.choices[0].message.content
     ai_listing = json.loads(raw_content)
+    print(ai_listing)
 
-    return ai_listing["properties"]
+    try:
+        listing = ai_listing.get("properties", {})
+        if listing:
+
+            return listing
+        else:
+
+            return ai_listing
+    except:
+        print("AI could not find listing info")
+        return {}
 
     
 
@@ -305,11 +372,29 @@ async def ai_parse_listing_snapshots(container: str, filled: dict) -> dict:
         },
         "availability": {
             "type": "string",
-            "description": "Availability of the listing"
+            "description": "Availability of the listing. Return ONLY the **number** of available units"
         },
-        "price": {
+        "price_low": {
             "type": "string",
-            "description": "Current price OR price range of the unit"
+            "description": """
+                Current price if there is a singular unit price 
+                OR lower price in range if there is a unit price range
+                only return if there is a numeric price value
+                AND only return the **Integer** value of the price
+            """
+        },
+        "price_high": {
+            "type": "string",
+            "description": """
+                Upper price range ONLY IF there is a range,
+                otherwise leave empty and fill price_low with price
+            """
+        },
+        "pre_deal_price": {
+            "type": "string",
+            "description": """
+                Price of the unit before any deals are applied, may have strikethrough on site
+            """
         }
     }
 
@@ -318,6 +403,7 @@ async def ai_parse_listing_snapshots(container: str, filled: dict) -> dict:
             props.pop(key, None)
 
     if not props:
+        print("AI not necessary snapshots")
         return {}
 
     prompt = (
@@ -351,7 +437,18 @@ async def ai_parse_listing_snapshots(container: str, filled: dict) -> dict:
     raw_content = init_response.choices[0].message.content
     ai_listing_snapshot = json.loads(raw_content)
 
-    return ai_listing_snapshot["properties"]
+
+    try:
+        listing_snapshot = ai_listing_snapshot.get("properties", {})
+        if listing_snapshot:
+
+            return listing_snapshot
+        else:
+
+            return ai_listing_snapshot
+    except:
+        print("AI could not find snapshot info")
+        return {}
 
 
 # ---------------------------------------------------------------------------
@@ -382,29 +479,5 @@ def sanitize_selector(selector: str) -> str:
 
 # --------------------------- heuristic selector ---------------------------
 
-async def heuristic_id_prefix_selector(page) -> Optional[str]:
-    """Inspect the DOM and return a prefix-based selector if multiple IDs share it."""
 
-    ids: List[str] = await page.eval_on_selector_all(
-        "[id]",
-        "els => els.map(e => e.id).slice(0, 500)"  # limit to avoid huge payload
-    )
-
-    from collections import Counter
-
-    prefix_counter: Counter[str] = Counter()
-
-    for id_val in ids:
-        m = re.match(r"^(.*?post-id-)", id_val)
-        if m:
-            prefix_counter[m.group(1)] += 1
-
-    if not prefix_counter:
-        return None
-
-    prefix, count = prefix_counter.most_common(1)[0]
-    if count < 3:
-        return None
-
-    return f"[id^='{prefix}']"
 

@@ -88,10 +88,16 @@ async def scrape_fp(floorplan, sem):
     async with sem:
         nav = Navigator()
         await nav.setup()
-        await nav.get_page(floorplan.url)
+        try:
+            await nav.get_page(floorplan.url, timeout_ms=20000)
+        except TimeoutError:
+            print(f"{floorplan.url} too slow")
+            return
 
-    selector = select(floorplan, nav, db)
+    selector = await select(floorplan, nav, db)
+    print(selector)
     if selector == None:
+        await nav.close()
         return
     
     # Number of listings on page with that selector 
@@ -99,7 +105,6 @@ async def scrape_fp(floorplan, sem):
 
     # Number of listings in DB with that selector
     prev_count = db.get_listing_count(floorplan.site_id, floorplan.property_id)
-
     
     try:
         # Get text from inside all listing containers
@@ -111,7 +116,7 @@ async def scrape_fp(floorplan, sem):
             print(f"No listing containers found for {floorplan.url} with selector {selector}")
             return
         if prev_count is None or prev_count != count:
-            listings = get_listings(floorplan, snippets)
+            listings = await get_listings(floorplan, snippets)
 
             if listings:
                 db.insert_listings(floorplan.site_id, listings)
@@ -120,7 +125,7 @@ async def scrape_fp(floorplan, sem):
             else: 
                 print(f"AI returned no listings for {floorplan.url}")
                 
-        snapshots = get_snapshots(floorplan, snippets)
+        snapshots = await get_snapshots(floorplan, snippets)
         db.insert_listing_snapshots(floorplan.site_id, snapshots)
         print(f"Inserted {len(snapshots)} listing snapshots for site {floorplan.site_id}")
         
@@ -146,29 +151,31 @@ async def select(floorplan, nav: Navigator, db: Database):
 
         # Try each candidate until one works
         chosen = None
+        print(f"🔍 Testing {len(candidates)} AI-generated selectors:")
+        for i, cand in enumerate(candidates):
+            print(f"  {i+1}. {cand}")
+        print()
+        
         for cand in candidates:
             cand = scrape_ai.sanitize_selector(cand)
+            print(f"Trying selector: {cand}")
             try:
                 # Check if the selector is valid
                 await nav.page.wait_for_selector(cand, timeout=5000)
                 elems = await nav.page.query_selector_all(cand)
-                if 1 < len(elems) <= 50:
+                element_count = len(elems)
+                print(f"  → Found {element_count} elements")
+                
+                if 1 < element_count <= 50:
+                    print(f"  ✅ Valid range! Selecting: {cand}")
                     chosen = cand
                     break
-            except Exception:
+                else:
+                    print(f"  ❌ Outside valid range (1 < {element_count} <= 50)")
+                    
+            except Exception as e:
+                print(f"  ❌ Selector failed: {e}")
                 continue
-
-        if not chosen:
-            # Try heuristic based on repeating id prefix
-            heuristic = await scrape_ai.heuristic_id_prefix_selector(nav.page)
-            if heuristic:
-                try:
-                    await nav.page.wait_for_selector(heuristic, timeout=5000)
-                    elems = await nav.page.query_selector_all(heuristic)
-                    if 0 < len(elems) <= 100:
-                        chosen = heuristic
-                except Exception:
-                    pass
 
         if not chosen:
             print(f"No valid selector found for {floorplan.url}")
@@ -178,7 +185,7 @@ async def select(floorplan, nav: Navigator, db: Database):
         selector = chosen
         db.save_selector(selector, floorplan.site_id, floorplan.property_id)
         print(f"Selector discovered and saved: {selector}")
-        return selector
+    return selector
 
 
 
@@ -188,9 +195,10 @@ async def get_listings(floorplan, listing_text):
     
     for lt in listing_text:
         regex_listing = mat.match_listing(lt)
-        ai_listing = scrape_ai.ai_parse_listings(lt, regex_listing)
-        listing = {**ai_listing, **regex_listing}
+        ai_listing = await scrape_ai.ai_parse_listings(lt, regex_listing)
+        listing = {**regex_listing,**ai_listing}
         listings.append(listing)
+    print(f"Listings: {listings}")
     return listings
 
         
@@ -200,9 +208,10 @@ async def get_snapshots(floorplan, snapshot_text):
 
     for st in snapshot_text:
         regex_snapshot = mat.match_snapshot(st)
-        ai_snapshot = scrape_ai.ai_parse_listing_snapshots(st, regex_snapshot)
-        listing_snapshot = {**ai_snapshot, **regex_snapshot}
+        ai_snapshot = await scrape_ai.ai_parse_listing_snapshots(st, regex_snapshot)
+        listing_snapshot = {**regex_snapshot, **ai_snapshot}
         snapshots.append(listing_snapshot)
+    print(snapshots)
     return snapshots
 
         

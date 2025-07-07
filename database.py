@@ -1,9 +1,6 @@
 import mysql.connector
 from typing import TypedDict, Optional, List
 from scrape_ai import SelectorList
-from scrape_ai import Site
-from scrape_ai import Listing
-from scrape_ai import ListingSnapshot
 from normalize import Normalizer
 
 class FPRecord(TypedDict):
@@ -80,29 +77,6 @@ class Database:
 
         self.connection.commit()
 
-    def insert_properties(self, site_id: int, site: Site):
-        cursor = self.connection.cursor()
-
-        sql = (
-            "INSERT INTO property "
-            "(site_id, floorplans_url, title, amenities, address) "
-            "VALUES (%s, %s, %s, %s, %s)"
-        )
-
-        data = [
-            (
-                site_id,
-                prop.floorplans_url,
-                prop.title,
-                prop.amenities,
-                prop.address,
-            )
-            for prop in site.properties
-        ]
-
-        cursor.executemany(sql, data)   # one round-trip for all rows
-        self.connection.commit()
-
     def insert_listings(
         self,
         site_id: int,
@@ -113,19 +87,17 @@ class Database:
         cursor = self.connection.cursor()
         sql = (
             "INSERT IGNORE INTO listing "
-            "(site_id, listname, bedrooms, bathrooms, sqft, shared_room, amenities) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s)"
+            "(site_id, listname, bedrooms, bathrooms, sqft) "
+            "VALUES (%s,%s,%s,%s,%s)"
         )
 
         data = [
             (
                 site_id,
                 l["listname"],
-                l["bedrooms"],
-                l["bathrooms"],
-                l["sqft"],
-                int(l["shared_room"]) if l["shared_room"] is not None else None,
-                l["amenities"],
+                l.get("bedrooms"),
+                l.get("bathrooms"),
+                l.get("sqft"),
 
             )
             for l in listings
@@ -134,20 +106,37 @@ class Database:
         cursor.executemany(sql, data)
         self.connection.commit()
 
-    def insert_listing_snapshots(self, site_id: int, snaps: List[dict]):
+    def insert_listing_snapshots(self, site_id: int, snaps):
         cursor = self.connection.cursor()
         sql = (
             "INSERT INTO listing_snapshot "
-            "(listing_id, availability, price, pre_deal_price, deals)"
-            "VALUES (%s,%s,%s,%s,%s)"
+            "(listing_id, availability, price_low, price_high, pre_deal_price, deals)"
+            "VALUES (%s,%s,%s,%s,%s,%s)"
         )
 
         data = []
         for s in snaps:
+            # Look up the FK for this listing. Skip snapshot if listing not yet stored.
             listing_id = self.lookup_listing_id(site_id, s["listname"])
             if listing_id is None:
                 continue  # listing not yet in table
-            data.append((listing_id, ["availability"], norm.normalize_price(s["price"]), s["pre_deal_price"], s["deals"]))
+
+            availability = s.get("availability")
+            price_low = s.get("price_low")
+            price_high = s.get("price_high")
+            pre_deal_price = s.get("pre_deal_price")  # Optional – may be missing
+            deals = s.get("deals")                    # Optional – may be missing
+
+            data.append(
+                (
+                    listing_id,
+                    availability,
+                    norm.normalize_price(price_low) if price_low else None,
+                    norm.normalize_price(price_high) if price_high else None,
+                    pre_deal_price,
+                    deals,
+                )
+            )
 
         if data:
             cursor.executemany(sql, data)
@@ -264,13 +253,9 @@ class Database:
 
     def previously_visited(self, site_id: int):
         cursor = self.connection.cursor(dictionary=True)
-        cursor.execute("SELECT id from property where site_id = %s", (site_id,))
-        property = cursor.fetchone()
-        junk = cursor.fetchall()
         cursor.execute("SELECT floorplans_url from site where id = %s", (site_id,))
         floorplans_url = cursor.fetchone()
-        junk2 = cursor.fetchall()
-        if property is None and floorplans_url['floorplans_url'] is None:
+        if floorplans_url['floorplans_url'] is None:
             return False
         else:
             return True
