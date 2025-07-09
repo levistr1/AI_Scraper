@@ -5,6 +5,23 @@ class Normalizer:
     def normalize_price(self, price) -> int:
         p = int(float(price.replace(",","").replace("$", "")))
         return p
+    
+    def normalize_sqft(self, sqft) -> int:
+        sq = int(sqft.replace(",",""))
+        return sq
             
+    def normalize_range(self, low, high) -> list[int]:
+        if low:
+            if high:
+                if high < low: # swap
+                    low = high
+                    return [low]
+                else:
+                    return [low, high]
+            else:
+                return [low]
+        else:
+            return []
+                    
         
 

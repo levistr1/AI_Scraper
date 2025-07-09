@@ -86,9 +86,13 @@ class Database:
 
         cursor = self.connection.cursor()
         sql = (
-            "INSERT IGNORE INTO listing "
+            "INSERT INTO listing "
             "(site_id, listname, bedrooms, bathrooms, sqft) "
-            "VALUES (%s,%s,%s,%s,%s)"
+            "VALUES (%s,%s,%s,%s,%s) "
+            "ON DUPLICATE KEY UPDATE "
+            "bedrooms = VALUES(bedrooms), "
+            "bathrooms = VALUES(bathrooms), "
+            "sqft = VALUES(sqft)"
         )
 
         data = [
@@ -97,7 +101,7 @@ class Database:
                 l["listname"],
                 l.get("bedrooms"),
                 l.get("bathrooms"),
-                l.get("sqft"),
+                norm.normalize_sqft(l.get("sqft")),
 
             )
             for l in listings

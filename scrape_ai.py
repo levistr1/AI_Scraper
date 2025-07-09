@@ -388,6 +388,8 @@ async def ai_parse_listing_snapshots(container: str, filled: dict) -> dict:
             "description": """
                 Upper price range ONLY IF there is a range,
                 otherwise leave empty and fill price_low with price
+                only return if there is a numeric price value
+                AND only return the **Integer** value of the price
             """
         },
         "pre_deal_price": {
