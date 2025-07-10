@@ -1,5 +1,6 @@
 from config import regex_patterns
 import re
+from normalize import Normalizer
 
 class Match:
     def __init__(self):
@@ -59,6 +60,7 @@ class Match:
         return listing
     
     def match_snapshot(self, text: str) -> dict:
+        norm = Normalizer()
         price_pattern = re.compile(regex_patterns["price"])
         availability_pattern = re.compile(regex_patterns["availability1"])
 
@@ -74,6 +76,10 @@ class Match:
                 low = prices[0]
                 high = None
         else:
+            low = None
+            high = None
+
+        if not norm.normalize_price_range(low, high):
             low = None
             high = None
         

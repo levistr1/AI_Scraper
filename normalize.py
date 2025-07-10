@@ -10,18 +10,17 @@ class Normalizer:
         sq = int(sqft.replace(",",""))
         return sq
             
-    def normalize_range(self, low, high) -> list[int]:
+    def normalize_price_range(self, low, high) -> bool:
         if low:
             if high:
-                if high < low: # swap
-                    low = high
-                    return [low]
+                if high < low: 
+                    return False
                 else:
-                    return [low, high]
+                    return True
             else:
-                return [low]
+                return True
         else:
-            return []
+            return False
                     
         
 
