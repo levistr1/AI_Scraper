@@ -390,6 +390,8 @@ async def ai_parse_listing_snapshots(container: str, filled: dict) -> dict:
                 otherwise leave empty and fill price_low with price
                 only return if there is a numeric price value
                 AND only return the **Integer** value of the price
+                Integer value of price_high should be greater than the integer value of price_low
+                If price_low is greater than price_high, set price_low = price_high and do not return price_high
             """
         },
         "pre_deal_price": {
@@ -397,7 +399,7 @@ async def ai_parse_listing_snapshots(container: str, filled: dict) -> dict:
             "description": """
                 Price of the unit before any deals are applied, may have strikethrough on site
             """
-        }
+        },
     }
 
     for key, value in filled.items():

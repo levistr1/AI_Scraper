@@ -14,6 +14,7 @@ CREATE TABLE `site` (
   `address` varchar(255),
   `container_selector` varchar(255),
   `listing_count` int,
+  `region` varchar(255),
   PRIMARY KEY (`id`)
 );
 
